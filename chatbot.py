@@ -94,7 +94,7 @@ CORS(app, supports_credentials=True, resources={
 
 
 # Enhanced security configuration
-app.secret_key = os.environ.get('SECRET_KEY', 'fixed_secret_key_for_local_development')
+app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))
 app.config.update(
     SESSION_COOKIE_SECURE=False,  # Set to True in production with HTTPS
     SESSION_COOKIE_HTTPONLY=True,
@@ -149,9 +149,6 @@ system_state = {
     'llama_responses': 0,
     'fallback_responses': 0
 }
-
-# WebRTC signaling messages storage (in-memory for demo)
-webrtc_messages = {}
 
 # Thread lock for system state updates
 state_lock = threading.Lock()
@@ -333,10 +330,10 @@ def get_current_user():
             try:
                 # Fetch user with role information
                 user = User.query.get(user_id)
-                if user and user.is_active:
+                if user:
                     # Dynamically add role if it exists on the model, otherwise default
                     user.role = getattr(user, 'role', 'patient')
-                    return user
+                return user
             except Exception as e:
                 logger.error(f"Error retrieving user {user_id}: {e}")
                 return None
@@ -808,10 +805,21 @@ def book_doctor():
         update_system_state('book_doctor')
         data = request.get_json() or {}
 
-        # Get user from session
-        user = get_current_user()
+        # --- CORRECTED LOGIC ---
+        # First, try to get the user from the active session
+        user = get_current_user() 
+        
+        # If no user is found in the session, fall back to the userId from the request
         if not user:
-            return jsonify({"error": "Authentication required"}), 401
+            user_id_param = data.get("userId")
+            if user_id_param:
+                # Query the database using the patient_id
+                user = User.query.filter_by(patient_id=user_id_param).first()
+
+        # If still no user is found, then authentication fails
+        if not user:
+            return jsonify({"success": False, "message": "Authentication required or user not found"}), 401
+        # --- END OF CORRECTION ---
 
         doctor_id_str = (data.get("doctorId") or "").strip()
         appointment_dt = (data.get("appointmentDatetime") or "").strip()
@@ -820,19 +828,19 @@ def book_doctor():
         symptoms = data.get("symptoms") or []
 
         if not doctor_id_str or not appointment_dt:
-            return jsonify({"error": "doctorId and appointmentDatetime are required"}), 400
+            return jsonify({"success": False, "message": "doctorId and appointmentDatetime are required"}), 400
 
         doctor = Doctor.query.filter(
             (Doctor.doctor_id == doctor_id_str) | (Doctor.id == doctor_id_str)
         ).first()
         if not doctor:
-            return jsonify({"error": "Doctor not found"}), 404
+            return jsonify({"success": False, "message": "Doctor not found"}), 404
 
         # Parse datetime in ISO format
         try:
             when = datetime.fromisoformat(appointment_dt)
         except Exception:
-            return jsonify({"error": "Invalid appointmentDatetime. Use ISO 8601 format."}), 400
+            return jsonify({"success": False, "message": "Invalid appointmentDatetime. Use ISO 8601 format."}), 400
 
         appt = Appointment(
             user_id=user.id,
@@ -872,7 +880,7 @@ def book_doctor():
         logger.error(f"Book doctor error: {e}")
         logger.error(traceback.format_exc())
         update_system_state('book_doctor', success=False)
-        return jsonify({"error": "Failed to book appointment"}), 500
+        return jsonify({"success": False, "message": "Failed to book appointment due to a server error."}), 500
 
 @app.route("/v1/history", methods=["POST"])
 def get_history():
@@ -1389,9 +1397,20 @@ def get_appointments():
     try:
         update_system_state('get_appointments')
 
+        # --- CORRECTED LOGIC ---
+        # First, try to get the user from the active session
         current_user = get_current_user()
+
+        # If no user is in the session, fall back to the 'userId' from the URL query parameter
+        if not current_user:
+            user_id_param = request.args.get('userId') # Use request.args for GET parameters
+            if user_id_param:
+                current_user = User.query.filter_by(patient_id=user_id_param).first()
+        
+        # If still no user is found, then authentication fails
         if not current_user:
             return jsonify({"success": False, "message": "Authentication required"}), 401
+        # --- END OF CORRECTION ---
 
         appointments = Appointment.query.filter_by(user_id=current_user.id)\
             .order_by(Appointment.appointment_datetime.desc()).all()
@@ -1806,51 +1825,6 @@ def get_pharmacy_dashboard():
         logger.error(f"Error fetching pharmacy dashboard: {e}", exc_info=True)
         return jsonify({"error": "Failed to load pharmacy dashboard"}), 500
 
-# WebRTC signaling endpoints
-@app.route("/v1/webrtc/<message_type>", methods=["POST"])
-def webrtc_signaling(message_type):
-    """Handle WebRTC signaling messages"""
-    try:
-        data = request.get_json() or {}
-        appointment_id = data.get("appointmentId")
-        message_data = data.get("data")
-
-        if not appointment_id or message_data is None:
-            return jsonify({"error": "appointmentId and data required"}), 400
-
-        if appointment_id not in webrtc_messages:
-            webrtc_messages[appointment_id] = []
-
-        webrtc_messages[appointment_id].append({
-            "type": message_type,
-            "data": message_data,
-            "timestamp": datetime.now().isoformat()
-        })
-
-        logger.info(f"WebRTC message stored: {message_type} for appointment {appointment_id}")
-        return jsonify({"success": True})
-
-    except Exception as e:
-        logger.error(f"WebRTC signaling error: {e}")
-        return jsonify({"error": "Failed to process signaling message"}), 500
-
-@app.route("/v1/webrtc/poll", methods=["GET"])
-def webrtc_poll():
-    """Poll for WebRTC signaling messages"""
-    try:
-        appointment_id = request.args.get("appointmentId")
-        if not appointment_id:
-            return jsonify([])
-
-        messages = webrtc_messages.get(appointment_id, [])
-        # Return messages and clear them after sending
-        webrtc_messages[appointment_id] = []
-        return jsonify(messages)
-
-    except Exception as e:
-        logger.error(f"WebRTC poll error: {e}")
-        return jsonify({"error": "Failed to poll messages"}), 500
-
 
 # Scheduled tasks and cleanup
 def cleanup_on_exit():
@@ -2009,4 +1983,6 @@ if __name__ == "__main__":
             logger.error(f"Failed to track startup metrics: {e}")
 
     # Start the Flask application
+
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
+
