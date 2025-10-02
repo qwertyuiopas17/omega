@@ -1808,7 +1808,48 @@ def get_doctor_dashboard():
     except Exception as e:
         logger.error(f"Error fetching doctor dashboard: {e}", exc_info=True)
         return jsonify({"error": "Failed to load doctor dashboard"}), 500
+# In chatbot.py, add this new function
 
+@app.route("/v1/doctor/appointments", methods=["GET"])
+def get_doctor_appointments():
+    """Provides a list of appointments specifically for the logged-in doctor."""
+    try:
+        # 1. Authenticate the doctor using the session
+        doctor_id_str = session.get('doctor_id')
+        if not doctor_id_str:
+            return jsonify({"success": False, "error": "Not authenticated as doctor"}), 401
+
+        doctor = Doctor.query.filter_by(doctor_id=doctor_id_str).first()
+        if not doctor:
+            return jsonify({"success": False, "error": "Doctor not found"}), 404
+
+        # 2. Query the database for appointments linked to this doctor's ID
+        # We join with the User table to get the patient's name directly
+        appointments = db.session.query(Appointment, User.full_name)\
+            .join(User, Appointment.user_id == User.id)\
+            .filter(Appointment.doctor_id == doctor.id)\
+            .order_by(Appointment.appointment_datetime.asc())\
+            .all()
+
+        appointments_data = []
+        for appt, patient_name in appointments:
+            # 3. Format the data for the frontend
+            appointments_data.append({
+                "id": appt.appointment_id,
+                "patient": patient_name,
+                "time": appt.appointment_datetime.strftime('%I:%M %p'),
+                "dateTime": appt.appointment_datetime.isoformat() + "Z",
+                "type": "video", # Defaulting to video for now
+                "message": appt.chief_complaint or "No details provided."
+            })
+
+        logger.info(f"✅ Successfully fetched {len(appointments_data)} appointments for Dr. {doctor.full_name}")
+        return jsonify({"success": True, "appointments": appointments_data})
+
+    except Exception as e:
+        logger.error(f"❌ Error fetching doctor appointments: {e}", exc_info=True)
+        return jsonify({"success": False, "error": "Failed to load appointments"}), 500
+        
 @app.route("/v1/doctor/profile", methods=["GET"])
 def get_doctor_profile():
     """Get doctor profile information"""
@@ -2084,6 +2125,7 @@ if __name__ == "__main__":
     # Start the Flask application
 
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
+
 
 
 
