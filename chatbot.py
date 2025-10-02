@@ -1316,6 +1316,9 @@ def get_dashboard():
         # If no user is in the session, fall back to the 'userId' from the URL query parameter
         if not current_user:
             user_id_param = request.args.get('userId')  # Check GET parameters
+            # --- ADD THIS LINE FOR DEBUGGING ---
+            logger.info(f"DASHBOARD DEBUG: No session user. Received userId param: '{user_id_param}'")
+            
             if user_id_param:
                 current_user = User.query.filter_by(patient_id=user_id_param).first()
         
@@ -2081,3 +2084,4 @@ if __name__ == "__main__":
     # Start the Flask application
 
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
+
