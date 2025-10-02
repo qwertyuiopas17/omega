@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, session
+from flask import Flask, request, jsonify, session, send_from_directory
 from flask_cors import CORS
 import os
 import logging
@@ -14,6 +14,8 @@ import atexit
 import re
 from langdetect import detect, LangDetectException
 from functools import wraps
+import uuid
+import base64
 
 # In chatbot.py, replace the clean_ai_response function
 
@@ -409,7 +411,12 @@ def convert_numpy_types(obj):
         return obj.tolist()
     else:
         return obj
-
+# Route to serve uploaded files
+@app.route('/uploads/<path:filename>')
+def serve_uploaded_file(filename):
+    """Serve uploaded files"""
+    uploads_dir = os.path.join(basedir, 'uploads')
+    return send_from_directory(uploads_dir, filename)
 # Enhanced API Routes with comprehensive functionality
 @app.route("/v1/register", methods=["POST"])
 def register():
@@ -1296,17 +1303,26 @@ def get_system_stats():
             "status": "error"
         }), 500
 
-# New Dashboard and Patient Management Endpoints
 @app.route("/v1/dashboard", methods=["GET"])
 def get_dashboard():
     """Get patient dashboard data"""
     try:
         update_system_state('get_dashboard')
 
-        # Get user from session
+        # --- CORRECTED LOGIC ---
+        # First, try to get the user from the active session
         current_user = get_current_user()
+
+        # If no user is in the session, fall back to the 'userId' from the URL query parameter
+        if not current_user:
+            user_id_param = request.args.get('userId')  # Check GET parameters
+            if user_id_param:
+                current_user = User.query.filter_by(patient_id=user_id_param).first()
+        
+        # If still no user is found, then authentication fails
         if not current_user:
             return jsonify({"success": False, "message": "Authentication required"}), 401
+        # --- END OF CORRECTION ---
 
         # Get next appointment
         next_appointment = Appointment.query.filter(
@@ -1336,11 +1352,15 @@ def get_dashboard():
 
         health_records_data = []
         for record in health_records:
-            health_records_data.append({
+            record_data = {
                 "date": record.created_at.isoformat(),
                 "title": record.title,
-                "description": record.description or ""
-            })
+                "description": record.description or "",
+                "recordType": record.record_type
+            }
+            if record.file_url:
+                record_data["imageUrl"] = record.file_url
+            health_records_data.append(record_data)
 
         return jsonify({
             "success": True,
@@ -1637,21 +1657,48 @@ def upload_prescription():
         tests = extracted_data.get('tests', []) if extracted_data else []
         diagnosis = extracted_data.get('diagnosis', '') if extracted_data else ''
 
+        # Save image file instead of storing base64 in database
+        
+        # Create uploads directory if it doesn't exist
+        uploads_dir = os.path.join(basedir, 'uploads', 'prescriptions')
+        os.makedirs(uploads_dir, exist_ok=True)
+
+        # Generate unique filename
+        file_extension = 'jpg'  # assuming jpeg
+        unique_filename = f"prescription_{user.patient_id}_{int(time.time())}_{uuid.uuid4().hex[:8]}.{file_extension}"
+        file_path = os.path.join(uploads_dir, unique_filename)
+
+        # Decode and save image
+        try:
+            image_data_clean = image_data.split(",", 1)[1] if "," in image_data else image_data
+            image_bytes = base64.b64decode(image_data_clean)
+            with open(file_path, 'wb') as f:
+                f.write(image_bytes)
+        except Exception as decode_error:
+            logger.error(f"Failed to decode/save image: {decode_error}")
+            return jsonify({"error": "Invalid image data"}), 400
         # Create HealthRecord for the prescription
         record = HealthRecord(
             user_id=user.id,
             record_type='prescription',
             title=f'Prescription from {doctor_name}',
             description=f'Uploaded prescription. Diagnosis: {diagnosis}' if diagnosis else 'Uploaded prescription image',
-            image_data=image_data,  # Store base64 data
             file_type='image/jpeg',
+            file_url=f'/uploads/prescriptions/{unique_filename}',  # Store relative path
             test_date=datetime.now().date()
         )
 
         db.session.add(record)
-        db.session.commit()
+        try:
+            db.session.commit()
+            logger.info(f"✅ Prescription uploaded for user {user.patient_id}, record_id: {record.record_id}")
+        except Exception as commit_error:
+            logger.error(f"❌ Failed to commit prescription upload for user {user.patient_id}: {commit_error}")
+            db.session.rollback()
+            return jsonify({"error": "Failed to save prescription to database"}), 500
 
-        logger.info(f"✅ Prescription uploaded for user {user.patient_id}")
+
+    
         return jsonify({
             "success": True,
             "message": "Prescription uploaded and analyzed successfully",
@@ -1828,7 +1875,7 @@ def get_pharmacy_dashboard():
         logger.error(f"Error fetching pharmacy dashboard: {e}", exc_info=True)
         return jsonify({"error": "Failed to load pharmacy dashboard"}), 500
     
-    
+
 # WebRTC signaling endpoints
 @app.route("/v1/webrtc/<message_type>", methods=["POST"])
 def webrtc_signaling(message_type):
@@ -2034,4 +2081,3 @@ if __name__ == "__main__":
     # Start the Flask application
 
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
-
