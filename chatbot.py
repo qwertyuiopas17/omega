@@ -1397,9 +1397,20 @@ def get_appointments():
     try:
         update_system_state('get_appointments')
 
+        # --- CORRECTED LOGIC ---
+        # First, try to get the user from the active session
         current_user = get_current_user()
+
+        # If no user is in the session, fall back to the 'userId' from the URL query parameter
+        if not current_user:
+            user_id_param = request.args.get('userId') # Use request.args for GET parameters
+            if user_id_param:
+                current_user = User.query.filter_by(patient_id=user_id_param).first()
+        
+        # If still no user is found, then authentication fails
         if not current_user:
             return jsonify({"success": False, "message": "Authentication required"}), 401
+        # --- END OF CORRECTION ---
 
         appointments = Appointment.query.filter_by(user_id=current_user.id)\
             .order_by(Appointment.appointment_datetime.desc()).all()
@@ -1974,3 +1985,4 @@ if __name__ == "__main__":
     # Start the Flask application
 
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
+
