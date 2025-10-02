@@ -1819,7 +1819,6 @@ def get_doctor_profile():
             return jsonify({"error": "Not authenticated as doctor"}), 401
 
         doctor = Doctor.query.filter_by(doctor_id=doctor_id_str).first()
-        doctor = db.session.get(Doctor, doctor_id_str)
         if not doctor:
             return jsonify({"error": "Doctor not found"}), 404
 
@@ -2085,5 +2084,6 @@ if __name__ == "__main__":
     # Start the Flask application
 
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
+
 
 
