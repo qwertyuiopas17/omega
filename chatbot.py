@@ -2029,16 +2029,7 @@ def internal_server_error(error):
             "health_helpline": "104"
         }
     }), 500
-# Serve static HTML files
-@app.route('/')
-def serve_index():
-    return send_from_directory('.', 'index.html')
 
-@app.route('/<path:filename>')
-def serve_static(filename):
-    if filename.endswith('.html'):
-        return send_from_directory('.', filename)
-    return send_from_directory('.', filename)
 # Enhanced startup display with Ollama information
 def display_startup_info():
     print("=" * 100)
@@ -2094,4 +2085,5 @@ if __name__ == "__main__":
     # Start the Flask application
 
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
+
 
