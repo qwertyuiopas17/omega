@@ -150,6 +150,9 @@ system_state = {
     'fallback_responses': 0
 }
 
+# WebRTC signaling messages storage (in-memory for demo)
+webrtc_messages = {}
+
 # Thread lock for system state updates
 state_lock = threading.Lock()
 
@@ -1824,6 +1827,52 @@ def get_pharmacy_dashboard():
     except Exception as e:
         logger.error(f"Error fetching pharmacy dashboard: {e}", exc_info=True)
         return jsonify({"error": "Failed to load pharmacy dashboard"}), 500
+    
+    
+# WebRTC signaling endpoints
+@app.route("/v1/webrtc/<message_type>", methods=["POST"])
+def webrtc_signaling(message_type):
+    """Handle WebRTC signaling messages"""
+    try:
+        data = request.get_json() or {}
+        appointment_id = data.get("appointmentId")
+        message_data = data.get("data")
+
+        if not appointment_id or message_data is None:
+            return jsonify({"error": "appointmentId and data required"}), 400
+
+        if appointment_id not in webrtc_messages:
+            webrtc_messages[appointment_id] = []
+
+        webrtc_messages[appointment_id].append({
+            "type": message_type,
+            "data": message_data,
+            "timestamp": datetime.now().isoformat()
+        })
+
+        logger.info(f"WebRTC message stored: {message_type} for appointment {appointment_id}")
+        return jsonify({"success": True})
+
+    except Exception as e:
+        logger.error(f"WebRTC signaling error: {e}")
+        return jsonify({"error": "Failed to process signaling message"}), 500
+
+@app.route("/v1/webrtc/poll", methods=["GET"])
+def webrtc_poll():
+    """Poll for WebRTC signaling messages"""
+    try:
+        appointment_id = request.args.get("appointmentId")
+        if not appointment_id:
+            return jsonify([])
+
+        messages = webrtc_messages.get(appointment_id, [])
+        # Return messages and clear them after sending
+        webrtc_messages[appointment_id] = []
+        return jsonify(messages)
+
+    except Exception as e:
+        logger.error(f"WebRTC poll error: {e}")
+        return jsonify({"error": "Failed to poll messages"}), 500
 
 
 # Scheduled tasks and cleanup
