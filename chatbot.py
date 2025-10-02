@@ -805,11 +805,21 @@ def book_doctor():
         update_system_state('book_doctor')
         data = request.get_json() or {}
 
-        # Get user from session or fallback to userId parameter
-        user_id_param = data.get("userId")
-        user = get_current_user(user_id_param)
+        # --- CORRECTED LOGIC ---
+        # First, try to get the user from the active session
+        user = get_current_user() 
+        
+        # If no user is found in the session, fall back to the userId from the request
         if not user:
-            return jsonify({"error": "Authentication required"}), 401
+            user_id_param = data.get("userId")
+            if user_id_param:
+                # Query the database using the patient_id
+                user = User.query.filter_by(patient_id=user_id_param).first()
+
+        # If still no user is found, then authentication fails
+        if not user:
+            return jsonify({"success": False, "message": "Authentication required or user not found"}), 401
+        # --- END OF CORRECTION ---
 
         doctor_id_str = (data.get("doctorId") or "").strip()
         appointment_dt = (data.get("appointmentDatetime") or "").strip()
@@ -818,19 +828,19 @@ def book_doctor():
         symptoms = data.get("symptoms") or []
 
         if not doctor_id_str or not appointment_dt:
-            return jsonify({"error": "doctorId and appointmentDatetime are required"}), 400
+            return jsonify({"success": False, "message": "doctorId and appointmentDatetime are required"}), 400
 
         doctor = Doctor.query.filter(
             (Doctor.doctor_id == doctor_id_str) | (Doctor.id == doctor_id_str)
         ).first()
         if not doctor:
-            return jsonify({"error": "Doctor not found"}), 404
+            return jsonify({"success": False, "message": "Doctor not found"}), 404
 
         # Parse datetime in ISO format
         try:
             when = datetime.fromisoformat(appointment_dt)
         except Exception:
-            return jsonify({"error": "Invalid appointmentDatetime. Use ISO 8601 format."}), 400
+            return jsonify({"success": False, "message": "Invalid appointmentDatetime. Use ISO 8601 format."}), 400
 
         appt = Appointment(
             user_id=user.id,
@@ -870,7 +880,7 @@ def book_doctor():
         logger.error(f"Book doctor error: {e}")
         logger.error(traceback.format_exc())
         update_system_state('book_doctor', success=False)
-        return jsonify({"error": "Failed to book appointment"}), 500
+        return jsonify({"success": False, "message": "Failed to book appointment due to a server error."}), 500
 
 @app.route("/v1/history", methods=["POST"])
 def get_history():
@@ -1962,4 +1972,5 @@ if __name__ == "__main__":
             logger.error(f"Failed to track startup metrics: {e}")
 
     # Start the Flask application
+
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
